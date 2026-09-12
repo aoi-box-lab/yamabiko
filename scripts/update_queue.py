@@ -9,6 +9,7 @@ TRANSLATIONS_DIR = Path('translations')
 QUEUE_MAX = 1000
 POPULAR_FETCH_LIMIT = 5000
 TARGET_LANGS = {'en'}
+USER_AGENT = 'Yamabiko/1.0 (https://github.com/aoi-box-lab/yamabiko)'
 
 
 def fetch_popular_ids(limit):
@@ -18,7 +19,10 @@ def fetch_popular_ids(limit):
     while url and len(ids) < limit:
         page += 1
         try:
-            with urllib.request.urlopen(url, timeout=30) as r:
+            req = urllib.request.Request(url, headers={
+                'User-Agent': USER_AGENT
+            })
+            with urllib.request.urlopen(req, timeout=30) as r:
                 data = json.loads(r.read())
         except Exception as e:
             print(f'  fetch error (page {page}): {e}')
