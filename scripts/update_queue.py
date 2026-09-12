@@ -8,7 +8,7 @@ QUEUE_FILE = Path('translate-queue.txt')
 TRANSLATIONS_DIR = Path('translations')
 
 QUEUE_MAX = 1000
-POPULAR_FETCH_LIMIT = 5000
+POPULAR_FETCH_LIMIT = 2000
 TARGET_LANGS = {'en'}
 USER_AGENT = 'Yamabiko/1.0 (https://github.com/aoi-box-lab/yamabiko)'
 
