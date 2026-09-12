@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import time
 import urllib.request
 from pathlib import Path
 
@@ -11,6 +12,26 @@ POPULAR_FETCH_LIMIT = 5000
 TARGET_LANGS = {'en'}
 USER_AGENT = 'Yamabiko/1.0 (https://github.com/aoi-box-lab/yamabiko)'
 
+FETCH_TIMEOUT = 60
+MAX_RETRIES = 3
+RETRY_WAIT = 5
+
+
+def fetch_page(url):
+    for attempt in range(MAX_RETRIES):
+        try:
+            req = urllib.request.Request(url, headers={
+                'User-Agent': USER_AGENT,
+                'Accept': 'application/json'
+            })
+            with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as r:
+                return json.loads(r.read())
+        except Exception as e:
+            print(f'  fetch error (try {attempt+1}/{MAX_RETRIES}): {e}')
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(RETRY_WAIT)
+    return None
+
 
 def fetch_popular_ids(limit):
     ids = []
@@ -18,14 +39,9 @@ def fetch_popular_ids(limit):
     page = 0
     while url and len(ids) < limit:
         page += 1
-        try:
-            req = urllib.request.Request(url, headers={
-                'User-Agent': USER_AGENT
-            })
-            with urllib.request.urlopen(req, timeout=30) as r:
-                data = json.loads(r.read())
-        except Exception as e:
-            print(f'  fetch error (page {page}): {e}')
+        data = fetch_page(url)
+        if data is None:
+            print(f'  giving up on page {page}')
             break
 
         for b in data.get('results', []):
