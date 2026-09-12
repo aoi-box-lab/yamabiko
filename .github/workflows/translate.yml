@@ -1,12 +1,16 @@
 name: Auto Translate
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: translate-workflow
+  cancel-in-progress: false
 
 jobs:
   translate:
@@ -28,7 +32,13 @@ jobs:
           path: ~/.cache/pip
           key: pip-${{ hashFiles('scripts/requirements.txt') }}
 
-      - name: Install dependencies
+      - name: Cache HF models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-opus-mt-v1
+
+      - name: Install deps
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -r scripts/requirements.txt
@@ -38,11 +48,23 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Run translation script
-        run: python scripts/translate.py
+      - name: Update queue
+        run: python scripts/update_queue.py
 
-      - name: Commit and push changes
+      - name: Commit queue
         run: |
-          git add data/
-          git diff --staged --quiet || git commit -m "docs: auto-translated output"
+          git add translate-queue.txt
+          git diff --staged --quiet || git commit -m "queue: auto update"
+          git push
+
+      - name: Translate
+        run: python scripts/translate.py --max-books 50
+
+      - name: Build manifest
+        run: python scripts/build_manifest.py
+
+      - name: Push manifest
+        run: |
+          git add translations/manifest.json
+          git diff --staged --quiet || git commit -m "manifest: update"
           git push
