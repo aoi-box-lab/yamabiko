@@ -48,7 +48,7 @@ def split_text(text, max_len):
     return chunks
 
 
-def translate_batch(tok, model, texts, batch_size=8):
+def translate_batch(tok, model, texts, batch_size=4):
     results = []
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i+batch_size]
@@ -66,6 +66,8 @@ def translate_batch(tok, model, texts, batch_size=8):
         for n in chunk_map:
             results.append(''.join(decoded[pos:pos+n]))
             pos += n
+        # メモリ解放
+        del inputs, out, decoded
     return results
 
 
