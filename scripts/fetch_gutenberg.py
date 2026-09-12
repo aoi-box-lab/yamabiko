@@ -5,10 +5,14 @@ import sys
 import urllib.request
 from pathlib import Path
 
+USER_AGENT = 'Yamabiko/1.0 (https://github.com/aoi-box-lab/yamabiko)'
+
+
 def fetch_book(book_id):
     meta_url = f'https://gutendex.com/books/{book_id}'
     try:
-        meta = json.loads(urllib.request.urlopen(meta_url, timeout=30).read())
+        req = urllib.request.Request(meta_url, headers={'User-Agent': USER_AGENT})
+        meta = json.loads(urllib.request.urlopen(req, timeout=30).read())
     except Exception as e:
         print(f'  meta failed: {e}')
         return None
@@ -24,7 +28,8 @@ def fetch_book(book_id):
         return None
 
     try:
-        raw = urllib.request.urlopen(text_url, timeout=60).read()
+        req2 = urllib.request.Request(text_url, headers={'User-Agent': USER_AGENT})
+        raw = urllib.request.urlopen(req2, timeout=60).read()
         text = raw.decode('utf-8', errors='replace')
     except Exception as e:
         print(f'  fetch failed: {e}')
