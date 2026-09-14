@@ -4,7 +4,6 @@ gutenberg_2554
 gutenberg_65238
 gutenberg_34413
 gutenberg_1727
-gutenberg_1661
 gutenberg_3268
 gutenberg_1513
 gutenberg_2641
@@ -998,3 +997,4 @@ gutenberg_52915
 gutenberg_60
 gutenberg_28807
 gutenberg_18897
+gutenberg_28500
