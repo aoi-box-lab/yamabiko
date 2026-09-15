@@ -3,3 +3,5 @@ transformers
 sentencepiece
 sacremoses
 accelerate
+ctranslate2
+huggingface_hub
