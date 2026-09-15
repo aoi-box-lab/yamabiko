@@ -9,19 +9,13 @@ import urllib.request
 from pathlib import Path
 from datetime import datetime, timezone
 
-# スレッドを1に固定（GitHub Actions での暴走対策）
 os.environ['OMP_NUM_THREADS'] = '1'
 os.environ['MKL_NUM_THREADS'] = '1'
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
-import torch
-torch.set_num_threads(1)
-try:
-    torch.set_num_interop_threads(1)
-except RuntimeError:
-    pass
-
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+import ctranslate2
+from huggingface_hub import snapshot_download
+from transformers import AutoTokenizer
 
 TRANSLATIONS_DIR = Path('translations')
 TRANSLATIONS_DIR.mkdir(exist_ok=True)
@@ -30,7 +24,7 @@ FAILED_FILE = Path('translate-failed.txt')
 INPUT_DIR = Path('input')
 INPUT_DIR.mkdir(exist_ok=True)
 
-MODEL_NAME = 'facebook/nllb-200-distilled-600M'
+CT2_MODEL_ID = 'olob0/nllb-200-distilled-600M-ct2-int8_float16'
 SRC_LANG = 'eng_Latn'
 TGT_LANG = 'jpn_Jpan'
 
@@ -108,7 +102,7 @@ def build_queue(max_books):
     return todo
 
 
-# ---------------- 翻訳 ----------------
+# ---------------- 翻訳（CTranslate2版） ----------------
 
 def split_text(text, max_len=400):
     if len(text) <= max_len:
@@ -128,26 +122,36 @@ def split_text(text, max_len=400):
     return chunks
 
 
-def translate_batch(tok, model, texts):
-    jpn_id = tok.convert_tokens_to_ids(TGT_LANG)
+def translate_batch(tok, translator, texts):
     results = []
     for i, text in enumerate(texts):
         chunks = split_text(text)
+        # チャンクをトークン化して CTranslate2 に渡す
+        source_tokens = [
+            tok.convert_ids_to_tokens(tok.encode(chunk, truncation=True))
+            for chunk in chunks
+        ]
+        # target_prefix に目標言語コードを指定（NLLBの仕様）
+        target_prefix = [[TGT_LANG]] * len(source_tokens)
+
+        out = translator.translate_batch(
+            source_tokens,
+            target_prefix=target_prefix,
+            beam_size=1,
+            max_decoding_length=256,
+            repetition_penalty=1.2,
+        )
+
         decoded = []
-        for chunk in chunks:
-            inputs = tok(chunk, return_tensors='pt', truncation=True)
-            with torch.no_grad():
-                out = model.generate(
-                    **inputs,
-                    forced_bos_token_id=jpn_id,
-                    max_new_tokens=256,
-                    num_beams=1,
-                    do_sample=False,
-                )
-            decoded.append(tok.decode(out[0], skip_special_tokens=True))
-            del inputs, out
+        for r in out:
+            tokens = r.hypotheses[0]
+            # 先頭の言語コードトークンを除去（NLLBの仕様）
+            if tokens and tokens[0] == TGT_LANG:
+                tokens = tokens[1:]
+            decoded.append(tok.decode(tok.convert_tokens_to_ids(tokens)))
+
         results.append(''.join(decoded))
-        del decoded
+        del decoded, source_tokens, out
         if (i + 1) % 20 == 0:
             log(f'    progress: {i+1}/{len(texts)}')
             gc.collect()
@@ -178,7 +182,7 @@ def ensure_input_text(book_id):
         return False
 
 
-def try_translate(book_id, tok, model):
+def try_translate(book_id, tok, translator):
     out_path = TRANSLATIONS_DIR / f'{book_id}.json'
     if out_path.exists():
         log(f'  skip (already translated): {book_id}')
@@ -193,13 +197,13 @@ def try_translate(book_id, tok, model):
             paragraphs = book['paragraphs']
             log(f'translating: {book_id} ({len(paragraphs)} paras)')
             t0 = time.time()
-            translated = translate_batch(tok, model, paragraphs)
+            translated = translate_batch(tok, translator, paragraphs)
 
             out = {
                 'bookId': book_id,
                 'formatVersion': 3,
-                'translator': 'NLLB-200',
-                'modelName': MODEL_NAME,
+                'translator': 'NLLB-200 (CTranslate2)',
+                'modelName': CT2_MODEL_ID,
                 'generatedAt': datetime.now(timezone.utc).isoformat(),
                 'translatedTexts': translated,
             }
@@ -232,11 +236,19 @@ def git_push_with_retry(max_retries=5):
 # ---------------- main ----------------
 
 def load_model():
-    log(f'loading model: {MODEL_NAME}')
-    tok = AutoTokenizer.from_pretrained(MODEL_NAME, src_lang=SRC_LANG)
-    model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME)
-    model.eval()
-    return tok, model
+    log(f'loading CTranslate2 model: {CT2_MODEL_ID}')
+    model_path = snapshot_download(CT2_MODEL_ID)
+    log(f'  model path: {model_path}')
+
+    tok = AutoTokenizer.from_pretrained(model_path)
+    translator = ctranslate2.Translator(
+        model_path,
+        device='cpu',
+        compute_type='int8',       # CPU向けint8量子化
+        inter_threads=1,
+        intra_threads=1,
+    )
+    return tok, translator
 
 
 def main():
@@ -249,7 +261,6 @@ def main():
         max_minutes = int(sys.argv[sys.argv.index('--max-minutes') + 1])
     deadline = time.time() + max_minutes * 60
 
-    # shard オプション（Phase 2 用、今は未使用でも受け取る）
     shard = 0
     shards = 1
     if '--shard' in sys.argv:
@@ -268,14 +279,14 @@ def main():
         return
 
     log(f'targets: {todo}')
-    tok, model = load_model()
+    tok, translator = load_model()
 
     done_now, failed_now = [], []
     for book_id in todo:
         if time.time() > deadline:
             log('timeout reached, stopping')
             break
-        result = try_translate(book_id, tok, model)
+        result = try_translate(book_id, tok, translator)
         if result in ('done', 'skip'):
             done_now.append(book_id)
         else:
