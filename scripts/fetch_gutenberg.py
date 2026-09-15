@@ -36,6 +36,12 @@ RETRY_WAIT = 5
 USER_AGENT = 'Yamabiko/1.0 (https://github.com/aoi-box-lab/yamabiko)'
 GUTENBERG_TOP = 'https://www.gutenberg.org/browse/scores/top'
 
+GUTENBERG_MIRRORS = [
+    'https://www.gutenberg.org',
+    'https://gutenberg.pglaf.org',
+    'https://mirrors.xmission.com/gutenberg',
+]
+
 
 def log(*args, **kwargs):
     print(*args, **kwargs, flush=True)
@@ -71,14 +77,8 @@ def fetch_popular_ids(limit=200):
 
 
 def fetch_text(book_id):
-    """Gutenbergから本文を直接取得。ミラーも試す。"""
     gid = book_id.replace('gutenberg_', '')
-    mirrors = [
-        'https://www.gutenberg.org',
-        'https://gutenberg.pglaf.org',
-        'https://mirrors.xmission.com/gutenberg',
-    ]
-    for base in mirrors:
+    for base in GUTENBERG_MIRRORS:
         url = f'{base}/cache/epub/{gid}/pg{gid}.txt'
         try:
             req = urllib.request.Request(url, headers={'User-Agent': USER_AGENT})
@@ -93,7 +93,6 @@ def fetch_text(book_id):
 # ---------------- debug ----------------
 
 def debug_top_book():
-    """人気順1位の本を取得して内容をログに出すだけ。翻訳はしない。"""
     log('fetching gutenberg top page...')
     try:
         html = fetch_top_html()
@@ -217,7 +216,6 @@ def ensure_input_text(book_id):
     if input_path.exists():
         return True
 
-    # 直接 Gutenberg から取得
     log(f'  fetching text: {book_id}')
     text = fetch_text(book_id)
     if not text:
