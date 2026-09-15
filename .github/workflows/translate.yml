@@ -1,0 +1,48 @@
+name: translate
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: translate
+  cancel-in-progress: false
+
+jobs:
+  translate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    permissions:
+      contents: write
+    env:
+      PYTHONUNBUFFERED: "1"
+      HF_HOME: ${{ github.workspace }}/.hf_cache
+      TRANSFORMERS_CACHE: ${{ github.workspace }}/.hf_cache
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Cache HF model
+        uses: actions/cache@v4
+        with:
+          path: .hf_cache
+          key: hf-nllb-200-distilled-600M
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Translate 1 book (test)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python -u scripts/translate.py --max-books 1 --max-minutes 330
