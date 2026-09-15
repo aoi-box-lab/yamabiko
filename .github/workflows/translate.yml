@@ -1,70 +1,46 @@
-name: Auto Translate
+name: translate
 
 on:
   schedule:
-    - cron: '0 */6 * * *'
+    - cron: '*/30 * * * *'   # 30分おき
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 concurrency:
-  group: translate-workflow
+  group: translate
   cancel-in-progress: false
 
 jobs:
   translate:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 30
+    env:
+      PYTHONUNBUFFERED: "1"
+      HF_HOME: ${{ github.workspace }}/.hf_cache
+      TRANSFORMERS_CACHE: ${{ github.workspace }}/.hf_cache
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ hashFiles('scripts/requirements.txt') }}
-
-      - name: Cache HF models
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-opus-mt-v1
+          cache: 'pip'
 
       - name: Install deps
-        run: |
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -r scripts/requirements.txt
+        run: pip install -r requirements.txt
+
+      - name: Cache HF model
+        uses: actions/cache@v4
+        with:
+          path: .hf_cache
+          key: hf-${{ runner.os }}-opus-mt-en-jap
 
       - name: Configure git
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Update queue
-        run: python scripts/update_queue.py
-
-      - name: Commit queue
-        run: |
-          git add translate-queue.txt
-          git diff --staged --quiet || git commit -m "queue: auto update"
-          git push
-
-      - name: Translate
-        run: python scripts/translate.py --max-books 50
-
-      - name: Build manifest
-        run: python scripts/build_manifest.py
-
-      - name: Push manifest
-        run: |
-          git add translations/manifest.json
-          git diff --staged --quiet || git commit -m "manifest: update"
-          git push
+      - name: Translate 2 books
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python -u scripts/translate.py --max-books 2 --max-minutes 25
