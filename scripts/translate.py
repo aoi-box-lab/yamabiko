@@ -39,6 +39,49 @@ def log(*args, **kwargs):
     print(*args, **kwargs, flush=True)
 
 
+# ---------------- debug ----------------
+
+def debug_top_book():
+    """人気順1位の本を取得して内容をログに出すだけ。翻訳はしない。"""
+    url = 'https://gutendex.com/books?sort=popular'
+    req = urllib.request.Request(url, headers={'User-Agent': USER_AGENT})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        data = json.loads(r.read())
+
+    book = data['results'][0]
+    gid = book['id']
+    log('=== top book meta ===')
+    log(f'id:        {gid}')
+    log(f'title:     {book.get("title", "")}')
+    log(f'author:    {book.get("authors", [{}])[0].get("name", "")}')
+    log(f'languages: {book.get("languages", [])}')
+
+    formats = book.get('formats', {})
+    text_url = None
+    for fmt in ['text/plain; charset=utf-8', 'text/plain',
+                'text/html; charset=utf-8']:
+        if fmt in formats:
+            text_url = formats[fmt]
+            log(f'format:    {fmt}')
+            break
+
+    if not text_url:
+        log('no text format')
+        return
+
+    req2 = urllib.request.Request(text_url, headers={'User-Agent': USER_AGENT})
+    with urllib.request.urlopen(req2, timeout=60) as r:
+        raw = r.read()
+    text = raw.decode('utf-8', errors='replace')
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+
+    log()
+    log('=== raw text (first 2000 chars) ===')
+    log(text[:2000])
+    log()
+    log(f'=== raw length: {len(text)} chars ===')
+
+
 # ---------------- gutendex ----------------
 
 def fetch_popular_ids(limit=200):
@@ -102,7 +145,7 @@ def build_queue(max_books):
     return todo
 
 
-# ---------------- 翻訳（CTranslate2版） ----------------
+# ---------------- 翻訳 ----------------
 
 def split_text(text, max_len=400):
     if len(text) <= max_len:
@@ -126,12 +169,10 @@ def translate_batch(tok, translator, texts):
     results = []
     for i, text in enumerate(texts):
         chunks = split_text(text)
-        # チャンクをトークン化して CTranslate2 に渡す
         source_tokens = [
             tok.convert_ids_to_tokens(tok.encode(chunk, truncation=True))
             for chunk in chunks
         ]
-        # target_prefix に目標言語コードを指定（NLLBの仕様）
         target_prefix = [[TGT_LANG]] * len(source_tokens)
 
         out = translator.translate_batch(
@@ -145,7 +186,6 @@ def translate_batch(tok, translator, texts):
         decoded = []
         for r in out:
             tokens = r.hypotheses[0]
-            # 先頭の言語コードトークンを除去（NLLBの仕様）
             if tokens and tokens[0] == TGT_LANG:
                 tokens = tokens[1:]
             decoded.append(tok.decode(tok.convert_tokens_to_ids(tokens)))
@@ -244,7 +284,7 @@ def load_model():
     translator = ctranslate2.Translator(
         model_path,
         device='cpu',
-        compute_type='int8',       # CPU向けint8量子化
+        compute_type='int8',
         inter_threads=1,
         intra_threads=1,
     )
@@ -252,6 +292,11 @@ def load_model():
 
 
 def main():
+    # --debug-top: 人気1位の本の内容を表示するだけ
+    if '--debug-top' in sys.argv:
+        debug_top_book()
+        return
+
     max_books = 2
     if '--max-books' in sys.argv:
         max_books = int(sys.argv[sys.argv.index('--max-books') + 1])
