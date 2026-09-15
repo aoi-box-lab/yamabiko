@@ -5,10 +5,11 @@ import subprocess
 import sys
 import time
 import gc
+import urllib.request
 from pathlib import Path
 from datetime import datetime, timezone
 
-# --- スレッドを1に固定（GitHub Actions 2-core での暴走・OOM対策）---
+# --- スレッドを1に固定 ---
 os.environ['OMP_NUM_THREADS'] = '1'
 os.environ['MKL_NUM_THREADS'] = '1'
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
@@ -24,19 +25,52 @@ from transformers import MarianMTModel, MarianTokenizer
 
 TRANSLATIONS_DIR = Path('translations')
 TRANSLATIONS_DIR.mkdir(exist_ok=True)
-QUEUE_FILE = Path('translate-queue.txt')
 FAILED_FILE = Path('translate-failed.txt')
 INPUT_DIR = Path('input')
 INPUT_DIR.mkdir(exist_ok=True)
 
 MODEL_EN_JA = 'Helsinki-NLP/opus-mt-en-jap'
-MAX_FAILED = 3  # これ以上失敗した本は捨てる
-RETRIES = 2     # 即リトライ回数
-RETRY_WAIT = 5  # 秒
+MAX_FAILED = 3
+RETRIES = 2
+RETRY_WAIT = 5
+
+USER_AGENT = 'Yamabiko/1.0 (https://github.com/aoi-box-lab/yamabiko)'
 
 
 def log(*args, **kwargs):
     print(*args, **kwargs, flush=True)
+
+
+# ---------------- gutendex から本を探す ----------------
+
+def fetch_popular_ids(limit=2000):
+    """gutendex から英語の人気本IDを取ってくる"""
+    ids = []
+    url = 'https://gutendex.com/books?sort=popular'
+    page = 0
+    while url and len(ids) < limit:
+        page += 1
+        try:
+            req = urllib.request.Request(url, headers={
+                'User-Agent': USER_AGENT,
+                'Accept': 'application/json',
+            })
+            with urllib.request.urlopen(req, timeout=60) as r:
+                data = json.loads(r.read())
+        except Exception as e:
+            log(f'  gutendex fetch failed (page {page}): {e}')
+            break
+        for b in data.get('results', []):
+            if 'en' not in b.get('languages', []):
+                continue
+            formats = b.get('formats', {})
+            if not any(k.startswith('text/plain') or k.startswith('text/html')
+                       for k in formats):
+                continue
+            ids.append(f"gutenberg_{b['id']}")
+        log(f'  page {page}: total {len(ids)}')
+        url = data.get('next')
+    return ids
 
 
 # ---------------- テキスト分割・翻訳 ----------------
@@ -60,7 +94,6 @@ def split_text(text, max_len):
 
 
 def translate_batch(tok, model, texts):
-    """1チャンクずつ推論してメモリを食わない。"""
     results = []
     for i, text in enumerate(texts):
         chunks = split_text(text, 400)
@@ -111,7 +144,7 @@ def ensure_input_text(book_id):
         return False
 
 
-# ---------------- 1冊翻訳（即リトライ付き） ----------------
+# ---------------- 1冊翻訳 ----------------
 
 def try_translate(book_id, tok, model):
     out_path = TRANSLATIONS_DIR / f'{book_id}.json'
@@ -154,7 +187,6 @@ def try_translate(book_id, tok, model):
 # ---------------- 失敗リスト ----------------
 
 def load_failed():
-    """{bookId: fail_count} を返す"""
     result = {}
     if FAILED_FILE.exists():
         for line in FAILED_FILE.read_text(encoding='utf-8').split('\n'):
@@ -169,6 +201,14 @@ def save_failed(failed):
     FAILED_FILE.write_text('\n'.join(lines) + ('\n' if lines else ''), encoding='utf-8')
 
 
+def load_model(name):
+    log(f'loading model: {name}')
+    tok = MarianTokenizer.from_pretrained(name)
+    model = MarianMTModel.from_pretrained(name)
+    model.eval()
+    return tok, model
+
+
 # ---------------- main ----------------
 
 def main():
@@ -181,16 +221,16 @@ def main():
         max_minutes = int(sys.argv[sys.argv.index('--max-minutes') + 1])
     deadline = time.time() + max_minutes * 60
 
-    if not QUEUE_FILE.exists():
-        log('no queue file')
-        return
-    queue = [l.strip() for l in QUEUE_FILE.read_text(encoding='utf-8').split('\n') if l.strip()]
     done = {p.stem for p in TRANSLATIONS_DIR.glob('*.json') if p.name != 'manifest.json'}
     failed = load_failed()
 
-    # 優先: 失敗リスト（まだ done でないもの）→ 通常キュー
+    log('fetching popular list from gutendex...')
+    popular = fetch_popular_ids(2000)
+    log(f'  fetched: {len(popular)}')
+
+    # 優先: 失敗リスト（まだ done でない） → 人気順
     priority = [b for b in failed.keys() if b not in done]
-    normal = [b for b in queue if b not in done and b not in priority]
+    normal = [b for b in popular if b not in done and b not in priority]
     todo = (priority + normal)[:max_books]
 
     if not todo:
@@ -211,7 +251,6 @@ def main():
         else:
             failed_now.append(book_id)
 
-    # 失敗リスト更新: 成功した本は除外、失敗した本はカウント+1
     new_failed = {k: v for k, v in failed.items() if k not in done_now}
     for b in failed_now:
         new_failed[b] = new_failed.get(b, 0) + 1
@@ -219,7 +258,6 @@ def main():
 
     log(f'finished: {len(done_now)} done, {len(failed_now)} failed')
 
-    # git コミット（まとめて）
     if done_now:
         try:
             subprocess.run(['git', 'add', '-A'], check=False)
@@ -231,14 +269,6 @@ def main():
             log('pushed')
         except Exception as e:
             log(f'git error: {e}')
-
-
-def load_model(name):
-    log(f'loading model: {name}')
-    tok = MarianTokenizer.from_pretrained(name)
-    model = MarianMTModel.from_pretrained(name)
-    model.eval()
-    return tok, model
 
 
 if __name__ == '__main__':
